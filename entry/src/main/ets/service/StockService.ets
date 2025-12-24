@@ -1,0 +1,549 @@
+// 股票API服务
+import http from '@ohos.net.http';
+import {
+  StockApiResponse,
+  StockInfo,
+  IndexData,
+  SearchApiResponse,
+  SearchStockItem,
+  KLineApiResponse,
+  KLineData,
+  MinuteApiResponse,
+  MinuteData,
+  ParsedGidInfo,
+  QuoteApiResponse,
+  QuoteData
+} from '../model/StockData';
+
+const API_KEY = 'd4d201fcdf64d1f7e19901fa8d618b3c'; // 聚合数据API Key
+const BASE_URL = 'http://web.juhe.cn/finance/stock/hs';
+
+// 新股票API配置
+const NEW_API_BASE = 'http://65.49.205.143:3000';
+const NEW_API_KEY = 'nVCB0pxv';
+
+export class StockService {
+  /**
+   * 获取股票实时数据
+   * @param gid 股票编号，如 sh601009
+   */
+  static async getStockData(gid: string): Promise<StockInfo | null> {
+    try {
+      const url = `${BASE_URL}?gid=${gid}&key=${API_KEY}`;
+      console.info(`请求股票数据: ${url}`);
+      const httpRequest = http.createHttp();
+      
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        readTimeout: 10000,
+        connectTimeout: 10000
+      });
+
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`股票响应数据: ${responseText.substring(0, 200)}...`);
+        
+        const result: StockApiResponse = JSON.parse(responseText);
+        if (result.resultcode === '200' && Array.isArray(result.result) && result.result.length > 0) {
+          httpRequest.destroy();
+          return result.result[0];
+        } else {
+          console.error(`股票数据错误: resultcode=${result.resultcode}, reason=${result.reason}`);
+        }
+      }
+      
+      httpRequest.destroy();
+      return null;
+    } catch (error) {
+      console.error('获取股票数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取指数数据
+   * @param type 0代表上证综合指数，1代表深证成份指数
+   */
+  static async getIndexData(type: number): Promise<IndexData | null> {
+    try {
+      const url = `${BASE_URL}?type=${type}&key=${API_KEY}`;
+      console.info(`请求指数数据: ${url}`);
+      const httpRequest = http.createHttp();
+      
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        readTimeout: 10000,
+        connectTimeout: 10000
+      });
+
+      console.info(`响应状态码: ${response.responseCode}`);
+      
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`指数响应数据: ${responseText}`);
+        
+        const result: StockApiResponse = JSON.parse(responseText);
+        console.info(`解析后 resultcode: ${result.resultcode}, error_code: ${result.error_code}`);
+        
+        // 指数API返回格式不同，使用error_code判断成功
+        if (result.error_code === 0 && !Array.isArray(result.result)) {
+          httpRequest.destroy();
+          return result.result as IndexData;
+        } else {
+          console.error(`数据错误: error_code=${result.error_code}, reason=${result.reason}`);
+        }
+      }
+      
+      httpRequest.destroy();
+      return null;
+    } catch (error) {
+      console.error('获取指数数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 批量获取股票数据（使用新API）
+   */
+  static async getMultipleStocks(gids: string[]): Promise<Map<string, StockInfo>> {
+    const resultMap = new Map<string, StockInfo>();
+
+    for (const gid of gids) {
+      try {
+        const parsed = StockService.parseGid(gid);
+        // 使用分时API获取完整数据（包含当前价格）
+        const minuteData = await StockService.getMinuteData(parsed.code, parsed.marketType, 'stock');
+
+        if (minuteData) {
+          const stockInfo = StockService.convertMinuteToStockInfo(gid, minuteData);
+          resultMap.set(gid, stockInfo);
+        } else {
+          console.warn(`[批量获取] ${gid} 无数据`);
+        }
+      } catch (error) {
+        console.error(`[批量获取] ${gid} 失败:`, error);
+      }
+      // 避免请求过快，间隔100ms
+      await StockService.delay(100);
+    }
+
+    return resultMap;
+  }
+
+  /**
+   * 将分时数据转换为StockInfo格式
+   */
+  static convertMinuteToStockInfo(gid: string, data: MinuteData): StockInfo {
+    const cur = data.cur;
+    const pankou = data.pankou;
+    const buyLevels = data.buyLevels;
+    const sellLevels = data.sellLevels;
+
+    // 当前价格：优先用 cur.price，否则用收盘价或最高价
+    const currentPrice = cur?.price ||
+      pankou?.['close']?.originValue ||
+      pankou?.['high']?.originValue ||
+      pankou?.['preClose']?.originValue ||
+      '0';
+
+    // 昨收价
+    const preClose = pankou?.['preClose']?.originValue || '0';
+
+    // 涨跌幅和涨跌额：优先用API返回的，否则计算
+    let ratio = cur?.ratio?.replace('%', '') ||
+      pankou?.['changeRatio']?.originValue?.replace('%', '') ||
+      '';
+    let increase = cur?.increase ||
+      pankou?.['change']?.originValue ||
+      '';
+
+    // 如果没有涨跌数据，根据当前价和昨收价计算
+    if ((!ratio || ratio === '0') && currentPrice !== '0' && preClose !== '0') {
+      const priceNum = parseFloat(currentPrice);
+      const preCloseNum = parseFloat(preClose);
+      if (preCloseNum > 0) {
+        const increaseNum = priceNum - preCloseNum;
+        const ratioNum = (increaseNum / preCloseNum) * 100;
+        increase = increaseNum.toFixed(2);
+        ratio = ratioNum.toFixed(2);
+      }
+    }
+
+    // 确保有默认值
+    if (!ratio) ratio = '0';
+    if (!increase) increase = '0';
+
+    console.info(`[转换分时] ${data.name}: price=${currentPrice}, preClose=${preClose}, ratio=${ratio}, increase=${increase}`);
+
+    return {
+      data: {
+        gid: gid,
+        name: data.name || data.basicInfo?.name || gid,
+        nowPri: currentPrice,
+        increPer: ratio,
+        increase: increase,
+        todayStartPri: pankou?.['open']?.originValue || '0',
+        todayMax: pankou?.['high']?.originValue || '0',
+        todayMin: pankou?.['low']?.originValue || '0',
+        yestodEndPri: pankou?.['preClose']?.originValue || '0',
+        competitivePri: currentPrice,
+        reservePri: currentPrice,
+        traNumber: pankou?.['volume']?.originValue || '0',
+        traAmount: pankou?.['amount']?.originValue || '0',
+        buyOne: buyLevels?.[0]?.bidvolume || '0',
+        buyOnePri: buyLevels?.[0]?.bidprice || '0',
+        buyTwo: buyLevels?.[1]?.bidvolume || '0',
+        buyTwoPri: buyLevels?.[1]?.bidprice || '0',
+        buyThree: buyLevels?.[2]?.bidvolume || '0',
+        buyThreePri: buyLevels?.[2]?.bidprice || '0',
+        buyFour: buyLevels?.[3]?.bidvolume || '0',
+        buyFourPri: buyLevels?.[3]?.bidprice || '0',
+        buyFive: buyLevels?.[4]?.bidvolume || '0',
+        buyFivePri: buyLevels?.[4]?.bidprice || '0',
+        sellOne: sellLevels?.[0]?.askvolume || '0',
+        sellOnePri: sellLevels?.[0]?.askprice || '0',
+        sellTwo: sellLevels?.[1]?.askvolume || '0',
+        sellTwoPri: sellLevels?.[1]?.askprice || '0',
+        sellThree: sellLevels?.[2]?.askvolume || '0',
+        sellThreePri: sellLevels?.[2]?.askprice || '0',
+        sellFour: sellLevels?.[3]?.askvolume || '0',
+        sellFourPri: sellLevels?.[3]?.askprice || '0',
+        sellFive: sellLevels?.[4]?.askvolume || '0',
+        sellFivePri: sellLevels?.[4]?.askprice || '0',
+        date: data.update?.text?.split(' ')[0] || '',
+        time: data.update?.text?.split(' ')[1] || ''
+      },
+      gopicture: {
+        minurl: '',
+        dayurl: '',
+        weekurl: '',
+        monthurl: ''
+      }
+    };
+  }
+
+  /**
+   * 将盘口数据转换为StockInfo格式
+   */
+  static convertQuoteToStockInfo(gid: string, data: QuoteData): StockInfo {
+    const cur = data.current;
+    const pankou = data.pankou;
+    const buyLevels = data.buyLevels;
+    const sellLevels = data.sellLevels;
+
+    // 尝试从多个来源获取当前价格
+    const currentPrice = cur?.price ||
+      pankou?.['price']?.originValue ||
+      pankou?.['last']?.originValue ||
+      pankou?.['close']?.originValue ||
+      '0';
+
+    // 昨收价
+    const preClose = pankou?.['preClose']?.originValue || '0';
+
+    // 尝试从多个来源获取涨跌幅
+    let ratio = cur?.ratio?.replace('%', '') ||
+      pankou?.['ratio']?.originValue?.replace('%', '') ||
+      pankou?.['changeRatio']?.originValue?.replace('%', '') ||
+      '';
+
+    // 尝试从多个来源获取涨跌额
+    let increase = cur?.increase ||
+      pankou?.['change']?.originValue ||
+      pankou?.['increase']?.originValue ||
+      '';
+
+    // 如果没有涨跌数据，根据当前价和昨收价计算
+    if ((!ratio || ratio === '0') && currentPrice !== '0' && preClose !== '0') {
+      const priceNum = parseFloat(currentPrice);
+      const preCloseNum = parseFloat(preClose);
+      if (preCloseNum > 0) {
+        const increaseNum = priceNum - preCloseNum;
+        const ratioNum = (increaseNum / preCloseNum) * 100;
+        increase = increaseNum.toFixed(2);
+        ratio = ratioNum.toFixed(2);
+      }
+    }
+
+    // 确保有默认值
+    if (!ratio) ratio = '0';
+    if (!increase) increase = '0';
+
+    console.info(`[转换] ${data.name}: price=${currentPrice}, preClose=${preClose}, ratio=${ratio}, increase=${increase}`);
+
+    return {
+      data: {
+        gid: gid,
+        name: data.name || gid,
+        nowPri: currentPrice,
+        increPer: ratio,
+        increase: increase,
+        todayStartPri: pankou?.['open']?.originValue || '0',
+        todayMax: pankou?.['high']?.originValue || '0',
+        todayMin: pankou?.['low']?.originValue || '0',
+        yestodEndPri: pankou?.['preClose']?.originValue || '0',
+        competitivePri: currentPrice,
+        reservePri: currentPrice,
+        traNumber: pankou?.['volume']?.originValue || '0',
+        traAmount: pankou?.['amount']?.originValue || '0',
+        buyOne: buyLevels?.[0]?.bidvolume || '0',
+        buyOnePri: buyLevels?.[0]?.bidprice || '0',
+        buyTwo: buyLevels?.[1]?.bidvolume || '0',
+        buyTwoPri: buyLevels?.[1]?.bidprice || '0',
+        buyThree: buyLevels?.[2]?.bidvolume || '0',
+        buyThreePri: buyLevels?.[2]?.bidprice || '0',
+        buyFour: buyLevels?.[3]?.bidvolume || '0',
+        buyFourPri: buyLevels?.[3]?.bidprice || '0',
+        buyFive: buyLevels?.[4]?.bidvolume || '0',
+        buyFivePri: buyLevels?.[4]?.bidprice || '0',
+        sellOne: sellLevels?.[0]?.askvolume || '0',
+        sellOnePri: sellLevels?.[0]?.askprice || '0',
+        sellTwo: sellLevels?.[1]?.askvolume || '0',
+        sellTwoPri: sellLevels?.[1]?.askprice || '0',
+        sellThree: sellLevels?.[2]?.askvolume || '0',
+        sellThreePri: sellLevels?.[2]?.askprice || '0',
+        sellFour: sellLevels?.[3]?.askvolume || '0',
+        sellFourPri: sellLevels?.[3]?.askprice || '0',
+        sellFive: sellLevels?.[4]?.askvolume || '0',
+        sellFivePri: sellLevels?.[4]?.askprice || '0',
+        date: '',
+        time: ''
+      },
+      gopicture: {
+        minurl: '',
+        dayurl: '',
+        weekurl: '',
+        monthurl: ''
+      }
+    };
+  }
+
+  private static delay(ms: number): Promise<void> {
+    return new Promise((resolve: Function) => setTimeout(resolve, ms));
+  }
+
+  // ========== 新股票API方法 ==========
+
+  /**
+   * 搜索股票（支持股票代码、名称、拼音首字母）
+   * @param keyword 搜索关键词
+   */
+  static async searchStock(keyword: string): Promise<SearchStockItem[]> {
+    const httpRequest = http.createHttp();
+    try {
+      const url = `${NEW_API_BASE}/api/search?keyword=${encodeURIComponent(keyword)}`;
+      console.info(`[搜索] 请求URL: ${url}`);
+
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json',
+          'X-API-Key': NEW_API_KEY
+        },
+        readTimeout: 10000,
+        connectTimeout: 10000
+      });
+
+      console.info(`[搜索] 响应状态码: ${response.responseCode}`);
+
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`[搜索] 响应内容: ${responseText.substring(0, 500)}`);
+
+        const result: SearchApiResponse = JSON.parse(responseText);
+        console.info(`[搜索] success=${result.success}, count=${result.count}`);
+
+        if (result.success && result.data && result.data.length > 0) {
+          console.info(`[搜索] 找到${result.data.length}条结果`);
+          httpRequest.destroy();
+          return result.data;
+        } else {
+          console.warn(`[搜索] 无结果或失败: ${result.message || '无数据'}`);
+        }
+      } else {
+        console.error(`[搜索] HTTP错误: ${response.responseCode}`);
+        // 打印响应内容看看错误信息
+        const errorText = response.result as string;
+        console.error(`[搜索] 错误响应: ${errorText}`);
+      }
+
+      httpRequest.destroy();
+      return [];
+    } catch (error) {
+      console.error('[搜索] 异常:', JSON.stringify(error));
+      httpRequest.destroy();
+      return [];
+    }
+  }
+
+  /**
+   * 获取K线数据
+   * @param code 股票代码
+   * @param ktype K线类型: min1/min5/min15/min30/min60/day/week/month/quarter/year
+   * @param marketType 市场类型: ab/hk/us
+   * @param financeType 金融类型: stock/index/fund
+   */
+  static async getKLineData(
+    code: string,
+    ktype: string = 'day',
+    marketType: string = 'ab',
+    financeType: string = 'stock'
+  ): Promise<KLineData | null> {
+    try {
+      const url = `${NEW_API_BASE}/api/kline?code=${code}&ktype=${ktype}&marketType=${marketType}&financeType=${financeType}`;
+      console.info(`[K线] 请求URL: ${url}`);
+
+      const httpRequest = http.createHttp();
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json',
+          'X-API-Key': NEW_API_KEY
+        },
+        readTimeout: 15000,
+        connectTimeout: 10000
+      });
+
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`K线响应长度: ${responseText.length}`);
+
+        const result: KLineApiResponse = JSON.parse(responseText);
+        if (result.success && result.data) {
+          httpRequest.destroy();
+          return result.data;
+        }
+      }
+
+      httpRequest.destroy();
+      return null;
+    } catch (error) {
+      console.error('获取K线数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取详细分时数据（包含盘口、买卖档位）
+   * @param code 股票代码
+   * @param marketType 市场类型
+   * @param financeType 金融类型
+   */
+  static async getMinuteData(
+    code: string,
+    marketType: string = 'ab',
+    financeType: string = 'stock'
+  ): Promise<MinuteData | null> {
+    try {
+      const url = `${NEW_API_BASE}/api/minute/${code}?marketType=${marketType}&financeType=${financeType}`;
+      console.info(`[分时] 请求URL: ${url}`);
+
+      const httpRequest = http.createHttp();
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json',
+          'X-API-Key': NEW_API_KEY
+        },
+        readTimeout: 10000,
+        connectTimeout: 10000
+      });
+
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`[分时] 响应内容: ${responseText.substring(0, 1000)}`);
+        const result: MinuteApiResponse = JSON.parse(responseText);
+        if (result.success && result.data) {
+          console.info(`[分时] cur: ${JSON.stringify(result.data.cur)}`);
+          httpRequest.destroy();
+          return result.data;
+        }
+      }
+
+      httpRequest.destroy();
+      return null;
+    } catch (error) {
+      console.error('获取分时数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取快速盘口数据
+   * @param code 股票代码
+   * @param marketType 市场类型
+   * @param financeType 金融类型
+   */
+  static async getQuoteData(
+    code: string,
+    marketType: string = 'ab',
+    financeType: string = 'stock'
+  ): Promise<QuoteData | null> {
+    try {
+      const url = `${NEW_API_BASE}/api/minute/${code}/quote?marketType=${marketType}&financeType=${financeType}`;
+      console.info(`[盘口] 请求URL: ${url}`);
+
+      const httpRequest = http.createHttp();
+      const response = await httpRequest.request(url, {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json',
+          'X-API-Key': NEW_API_KEY
+        },
+        readTimeout: 10000,
+        connectTimeout: 10000
+      });
+
+      if (response.responseCode === 200) {
+        const responseText = response.result as string;
+        console.info(`[盘口] 响应内容: ${responseText.substring(0, 1500)}`);
+        const result: QuoteApiResponse = JSON.parse(responseText);
+        if (result.success && result.data) {
+          if (result.data.pankou) {
+            const pankouKeys = Object.keys(result.data.pankou);
+            console.info(`[盘口] pankou字段: ${pankouKeys.join(', ')}`);
+          }
+          console.info(`[盘口] current: ${JSON.stringify(result.data.current)}`);
+          httpRequest.destroy();
+          return result.data;
+        }
+      }
+
+      httpRequest.destroy();
+      return null;
+    } catch (error) {
+      console.error('获取盘口数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 将搜索结果转换为旧格式的股票代码（兼容现有存储）
+   * @param item 搜索结果项
+   */
+  static convertToGid(item: SearchStockItem): string {
+    const exchange = item.exchange.toLowerCase();
+    return `${exchange}${item.code}`;
+  }
+
+  /**
+   * 从gid解析股票代码和交易所
+   * @param gid 股票编号如 sh601009
+   */
+  static parseGid(gid: string): ParsedGidInfo {
+    const exchange = gid.substring(0, 2).toUpperCase();
+    const code = gid.substring(2);
+    const result: ParsedGidInfo = {
+      code: code,
+      exchange: exchange,
+      marketType: 'ab'
+    };
+    return result;
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "鸿股通 - 股票即时查询工具"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "查看实时股票指数和行情数据"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "鸿股通"
+    }
+  ]
+}

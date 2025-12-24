@@ -1,0 +1,327 @@
+// 本地存储服务 - 用于管理自选股和分组
+import preferences from '@ohos.data.preferences';
+import { StockGroup, PriceAlert, PriceAlertInput, IndexData, StockInfo } from '../model/StockData';
+
+const PREFERENCE_NAME = 'stock_preferences';
+const KEY_STOCK_GROUPS = 'stock_groups';
+const KEY_PRICE_ALERTS = 'price_alerts';
+const KEY_DEFAULT_STOCKS = 'default_stocks';
+const KEY_SH_INDEX_DATA = 'sh_index_data';
+const KEY_SZ_INDEX_DATA = 'sz_index_data';
+const KEY_INDEX_REFRESH_TIME = 'index_refresh_time';
+const KEY_STOCK_DATA_MAP = 'stock_data_map';
+const KEY_STOCK_REFRESH_TIME = 'stock_refresh_time';
+
+export class StorageService {
+  private static dataPreferences: preferences.Preferences | null = null;
+
+  /**
+   * 初始化存储
+   */
+  static async init(context: Context): Promise<void> {
+    try {
+      StorageService.dataPreferences = await preferences.getPreferences(context, PREFERENCE_NAME);
+      
+      // 初始化默认分组和股票
+      const groups = await StorageService.getStockGroups();
+      if (groups.length === 0) {
+        const defaultGroup: StockGroup = {
+          id: 'default',
+          name: '自选股',
+          stocks: ['sh601009', 'sh600036', 'sz000001'], // 默认添加几只股票
+          createTime: Date.now()
+        };
+        await StorageService.saveStockGroups([defaultGroup]);
+      }
+    } catch (error) {
+      console.error('初始化存储失败:', error);
+    }
+  }
+
+  /**
+   * 获取所有分组
+   */
+  static async getStockGroups(): Promise<StockGroup[]> {
+    try {
+      if (!StorageService.dataPreferences) return [];
+      
+      const groupsStr = await StorageService.dataPreferences.get(KEY_STOCK_GROUPS, '[]');
+      return JSON.parse(groupsStr as string);
+    } catch (error) {
+      console.error('获取分组失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 保存分组
+   */
+  static async saveStockGroups(groups: StockGroup[]): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      
+      await StorageService.dataPreferences.put(KEY_STOCK_GROUPS, JSON.stringify(groups));
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存分组失败:', error);
+    }
+  }
+
+  /**
+   * 添加分组
+   */
+  static async addStockGroup(name: string): Promise<StockGroup> {
+    const newGroup: StockGroup = {
+      id: `group_${Date.now()}`,
+      name,
+      stocks: [],
+      createTime: Date.now()
+    };
+    
+    const groups = await StorageService.getStockGroups();
+    groups.push(newGroup);
+    await StorageService.saveStockGroups(groups);
+    
+    return newGroup;
+  }
+
+  /**
+   * 删除分组
+   */
+  static async deleteStockGroup(groupId: string): Promise<void> {
+    const groups = await StorageService.getStockGroups();
+    const filteredGroups = groups.filter((g: StockGroup) => g.id !== groupId);
+    await StorageService.saveStockGroups(filteredGroups);
+  }
+
+  /**
+   * 添加股票到分组
+   */
+  static async addStockToGroup(groupId: string, stockGid: string): Promise<void> {
+    const groups = await StorageService.getStockGroups();
+    const group = groups.find((g: StockGroup) => g.id === groupId);
+    
+    if (group && !group.stocks.includes(stockGid)) {
+      group.stocks.push(stockGid);
+      await StorageService.saveStockGroups(groups);
+    }
+  }
+
+  /**
+   * 从分组删除股票
+   */
+  static async removeStockFromGroup(groupId: string, stockGid: string): Promise<void> {
+    const groups = await StorageService.getStockGroups();
+    const group = groups.find((g: StockGroup) => g.id === groupId);
+    
+    if (group) {
+      group.stocks = group.stocks.filter((s: string) => s !== stockGid);
+      await StorageService.saveStockGroups(groups);
+    }
+  }
+
+  /**
+   * 获取所有价格预警
+   */
+  static async getPriceAlerts(): Promise<PriceAlert[]> {
+    try {
+      if (!StorageService.dataPreferences) return [];
+      
+      const alertsStr = await StorageService.dataPreferences.get(KEY_PRICE_ALERTS, '[]');
+      return JSON.parse(alertsStr as string);
+    } catch (error) {
+      console.error('获取预警失败:', error);
+      return [];
+    }
+  }
+
+  /**
+   * 保存价格预警
+   */
+  static async savePriceAlerts(alerts: PriceAlert[]): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      
+      await StorageService.dataPreferences.put(KEY_PRICE_ALERTS, JSON.stringify(alerts));
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存预警失败:', error);
+    }
+  }
+
+  /**
+   * 添加价格预警
+   */
+  static async addPriceAlert(alert: PriceAlertInput): Promise<void> {
+    const alerts = await StorageService.getPriceAlerts();
+    const newAlert: PriceAlert = {
+      id: `alert_${Date.now()}`,
+      stockGid: alert.stockGid,
+      stockName: alert.stockName,
+      conditionType: alert.conditionType,
+      targetPrice: alert.targetPrice,
+      minPrice: alert.minPrice,
+      maxPrice: alert.maxPrice,
+      isActive: alert.isActive,
+      createTime: Date.now()
+    };
+    alerts.push(newAlert);
+    await StorageService.savePriceAlerts(alerts);
+  }
+
+  /**
+   * 删除价格预警
+   */
+  static async deletePriceAlert(alertId: string): Promise<void> {
+    const alerts = await StorageService.getPriceAlerts();
+    const filteredAlerts = alerts.filter((a: PriceAlert) => a.id !== alertId);
+    await StorageService.savePriceAlerts(filteredAlerts);
+  }
+
+  /**
+   * 保存上证指数数据
+   */
+  static async saveShIndexData(data: IndexData): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      await StorageService.dataPreferences.put(KEY_SH_INDEX_DATA, JSON.stringify(data));
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存上证指数数据失败:', error);
+    }
+  }
+
+  /**
+   * 保存深证指数数据
+   */
+  static async saveSzIndexData(data: IndexData): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      await StorageService.dataPreferences.put(KEY_SZ_INDEX_DATA, JSON.stringify(data));
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存深证指数数据失败:', error);
+    }
+  }
+
+  /**
+   * 获取上证指数数据
+   */
+  static async getShIndexData(): Promise<IndexData | null> {
+    try {
+      if (!StorageService.dataPreferences) return null;
+      const dataStr = await StorageService.dataPreferences.get(KEY_SH_INDEX_DATA, '');
+      if (!dataStr) return null;
+      return JSON.parse(dataStr as string);
+    } catch (error) {
+      console.error('获取上证指数数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取深证指数数据
+   */
+  static async getSzIndexData(): Promise<IndexData | null> {
+    try {
+      if (!StorageService.dataPreferences) return null;
+      const dataStr = await StorageService.dataPreferences.get(KEY_SZ_INDEX_DATA, '');
+      if (!dataStr) return null;
+      return JSON.parse(dataStr as string);
+    } catch (error) {
+      console.error('获取深证指数数据失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 保存指数刷新时间
+   */
+  static async saveIndexRefreshTime(time: string): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      await StorageService.dataPreferences.put(KEY_INDEX_REFRESH_TIME, time);
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存刷新时间失败:', error);
+    }
+  }
+
+  /**
+   * 获取指数刷新时间
+   */
+  static async getIndexRefreshTime(): Promise<string> {
+    try {
+      if (!StorageService.dataPreferences) return '';
+      return await StorageService.dataPreferences.get(KEY_INDEX_REFRESH_TIME, '') as string;
+    } catch (error) {
+      console.error('获取刷新时间失败:', error);
+      return '';
+    }
+  }
+
+  /**
+   * 保存股票数据Map
+   */
+  static async saveStockDataMap(dataMap: Map<string, StockInfo>): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      // 手动转换Map为对象
+      const mapObject: Record<string, StockInfo> = {};
+      dataMap.forEach((value, key) => {
+        mapObject[key] = value;
+      });
+      await StorageService.dataPreferences.put(KEY_STOCK_DATA_MAP, JSON.stringify(mapObject));
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存股票数据失败:', error);
+    }
+  }
+
+  /**
+   * 获取股票数据Map
+   */
+  static async getStockDataMap(): Promise<Map<string, StockInfo>> {
+    try {
+      if (!StorageService.dataPreferences) return new Map();
+      const dataStr = await StorageService.dataPreferences.get(KEY_STOCK_DATA_MAP, '{}');
+      const mapObject: Record<string, StockInfo> = JSON.parse(dataStr as string);
+      // 手动转换对象为Map，使用ArkTS兼容的方式
+      const resultMap = new Map<string, StockInfo>();
+      const keys = Object.keys(mapObject);
+      keys.forEach((key: string) => {
+        resultMap.set(key, mapObject[key]);
+      });
+      return resultMap;
+    } catch (error) {
+      console.error('获取股票数据失败:', error);
+      return new Map();
+    }
+  }
+
+  /**
+   * 保存股票刷新时间
+   */
+  static async saveStockRefreshTime(time: string): Promise<void> {
+    try {
+      if (!StorageService.dataPreferences) return;
+      await StorageService.dataPreferences.put(KEY_STOCK_REFRESH_TIME, time);
+      await StorageService.dataPreferences.flush();
+    } catch (error) {
+      console.error('保存股票刷新时间失败:', error);
+    }
+  }
+
+  /**
+   * 获取股票刷新时间
+   */
+  static async getStockRefreshTime(): Promise<string> {
+    try {
+      if (!StorageService.dataPreferences) return '';
+      return await StorageService.dataPreferences.get(KEY_STOCK_REFRESH_TIME, '') as string;
+    } catch (error) {
+      console.error('获取股票刷新时间失败:', error);
+      return '';
+    }
+  }
+}
