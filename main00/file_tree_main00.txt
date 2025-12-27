@@ -1,0 +1,45 @@
+文件结构树：E:\AAUniversity\Junior\DRAFT\gupiao\main00
+├── ets
+│   ├── entryability
+│   │   └── EntryAbility.txt
+│   ├── entrybackupability
+│   │   └── EntryBackupAbility.txt
+│   ├── model
+│   │   └── StockData.txt
+│   ├── pages
+│   │   ├── AlertManage.txt
+│   │   ├── FavoritePage.txt
+│   │   ├── GroupManage.txt
+│   │   ├── Index.txt
+│   │   ├── MarketPage.txt
+│   │   ├── MinePage.txt
+│   │   └── StockDetail.txt
+│   ├── service
+│   │   ├── FormDataProvider.txt
+│   │   ├── StockService.txt
+│   │   └── StorageService.txt
+│   └── widget
+│       ├── StockWidgetCard.txt
+│       └── pages
+│           └── StockWidgetCard.txt
+├── file_tree_main00.txt
+├── module.txt
+└── resources
+    ├── base
+    │   ├── element
+    │   │   ├── color.txt
+    │   │   ├── float.txt
+    │   │   └── string.txt
+    │   ├── media
+    │   │   ├── background.txt
+    │   │   ├── foreground.txt
+    │   │   ├── layered_image.txt
+    │   │   └── startIcon.txt
+    │   └── profile
+    │       ├── backup_config.txt
+    │       ├── form_config.txt
+    │       └── main_pages.txt
+    ├── dark
+    │   └── element
+    │       └── color.txt
+    └── rawfile

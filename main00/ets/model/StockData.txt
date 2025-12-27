@@ -1,0 +1,272 @@
+// 股票数据模型
+
+// 股票实时数据
+export interface StockRealtimeData {
+  gid: string; // 股票编号
+  increPer: string; // 涨跌百分比
+  increase: string; // 涨跌额
+  name: string; // 股票名称
+  todayStartPri: string; // 今日开盘价
+  yestodEndPri: string; // 昨日收盘价
+  nowPri: string; // 当前价格
+  todayMax: string; // 今日最高价
+  todayMin: string; // 今日最低价
+  competitivePri: string; // 竞买价
+  reservePri: string; // 竞卖价
+  traNumber: string; // 成交量
+  traAmount: string; // 成交金额
+  buyOne: string; // 买一
+  buyOnePri: string; // 买一报价
+  buyTwo: string;
+  buyTwoPri: string;
+  buyThree: string;
+  buyThreePri: string;
+  buyFour: string;
+  buyFourPri: string;
+  buyFive: string;
+  buyFivePri: string;
+  sellOne: string; // 卖一
+  sellOnePri: string; // 卖一报价
+  sellTwo: string;
+  sellTwoPri: string;
+  sellThree: string;
+  sellThreePri: string;
+  sellFour: string;
+  sellFourPri: string;
+  sellFive: string;
+  sellFivePri: string;
+  date: string; // 日期
+  time: string; // 时间
+}
+
+// 大盘数据
+export interface DapanData {
+  dot: string; // 当前价格
+  name: string;
+  nowPic: string; // 涨量
+  rate: string; // 涨幅(%)
+  traAmount: string; // 成交额(万)
+  traNumber: string; // 成交量
+}
+
+// K线图URL
+export interface KLineUrls {
+  minurl: string; // 分时K线图
+  dayurl: string; // 日K线图
+  weekurl: string; // 周K线图
+  monthurl: string; // 月K线图
+}
+
+// 指数数据
+export interface IndexData {
+  dealNum: string; // 成交量(手)
+  dealPri: string; // 成交额
+  highPri: string; // 最高
+  increPer: string; // 涨跌百分比
+  increase: string; // 涨跌幅
+  lowpri: string; // 最低
+  name: string; // 名称
+  nowpri: string; // 当前价格
+  openPri: string; // 今开
+  time: string; // 时间
+  yesPri: string; // 昨收
+}
+
+// 股票完整数据
+export interface StockInfo {
+  data: StockRealtimeData;
+  dapandata?: DapanData;
+  gopicture: KLineUrls;
+}
+
+// API响应
+export interface StockApiResponse {
+  resultcode: string;
+  reason: string;
+  result: StockInfo[] | IndexData;
+  error_code?: number;
+}
+
+// 自选股分组
+export interface StockGroup {
+  id: string;
+  name: string;
+  stocks: string[]; // 股票gid列表
+  createTime: number;
+}
+
+// 价格预警条件
+export interface PriceAlert {
+  id: string;
+  stockGid: string;
+  stockName: string;
+  conditionType: 'above' | 'below' | 'range'; // 高于、低于、区间
+  targetPrice?: number; // 目标价格
+  minPrice?: number; // 最低价格（区间用）
+  maxPrice?: number; // 最高价格（区间用）
+  isActive: boolean;
+  createTime: number;
+}
+
+// 添加价格预警输入类型
+export interface PriceAlertInput {
+  stockGid: string;
+  stockName: string;
+  conditionType: 'above' | 'below' | 'range';
+  targetPrice?: number;
+  minPrice?: number;
+  maxPrice?: number;
+  isActive: boolean;
+}
+
+// ========== 新股票API数据模型 ==========
+
+// 搜索结果项
+export interface SearchStockItem {
+  code: string;        // 股票代码
+  name: string;        // 股票名称
+  market: string;      // 市场类型 ab/hk/us
+  exchange: string;    // 交易所 SH/SZ
+  financeType: string; // 金融类型 stock/index/fund
+  price: string;       // 当前价格
+  increase: string;    // 涨跌额
+  ratio: string;       // 涨跌幅
+  amount: string;      // 成交额
+  volume: string;      // 成交量
+  logo?: string;       // logo图片
+}
+
+// 搜索API响应
+export interface SearchApiResponse {
+  success: boolean;
+  data: SearchStockItem[];
+  count: number;
+  message?: string;
+}
+
+// K线数据点
+export interface KLineDataPoint {
+  timestamp: string;
+  time: string;
+  open: string;
+  close: string;
+  volume: string;
+  high: string;
+  low: string;
+  amount: string;
+  range: string;       // 涨跌额
+  ratio: string;       // 涨跌幅
+  turnoverratio: string; // 换手率
+  preClose: string;    // 昨收
+  ma5avgprice: string;
+  ma5volume: string;
+  ma10avgprice: string;
+  ma10volume: string;
+  ma20avgprice: string;
+  ma20volume: string;
+}
+
+// K线API响应数据
+export interface KLineData {
+  code: string;
+  name: string;
+  ktype: string;
+  marketType: string;
+  data: KLineDataPoint[];
+  count: number;
+  headers: string[];
+  keys: string[];
+}
+
+// K线API响应
+export interface KLineApiResponse {
+  success: boolean;
+  data: KLineData;
+  message?: string;
+}
+
+// 盘口数据项
+export interface PankouItem {
+  name: string;
+  value: string;
+  originValue: string;
+  status?: string;
+}
+
+// 买卖档位
+export interface OrderLevel {
+  bidprice?: string;
+  bidvolume?: string;
+  askprice?: string;
+  askvolume?: string;
+}
+
+// 基本信息
+export interface MinuteBasicInfo {
+  exchange: string;
+  code: string;
+  name: string;
+  tradeStatus: string;
+  logo: string;
+}
+
+// 当前价格信息
+export interface MinuteCurInfo {
+  time: number;
+  price: string;
+  ratio: string;
+  increase: string;
+  volume: string;
+  avgPrice: string;
+}
+
+// 更新信息
+export interface MinuteUpdateInfo {
+  text: string;
+  stockStatus: string;
+  tradeStatus: string;
+}
+
+// 分时数据响应
+export interface MinuteData {
+  code: string;
+  name: string;
+  marketType: string;
+  basicInfo: MinuteBasicInfo;
+  pankou: Record<string, PankouItem>;
+  buyLevels: OrderLevel[];
+  sellLevels: OrderLevel[];
+  cur: MinuteCurInfo;
+  update: MinuteUpdateInfo;
+}
+
+// 分时API响应
+export interface MinuteApiResponse {
+  success: boolean;
+  data: MinuteData;
+  message?: string;
+}
+
+// 解析后的股票代码信息
+export interface ParsedGidInfo {
+  code: string;
+  exchange: string;
+  marketType: string;
+}
+
+// 盘口数据响应
+export interface QuoteApiResponse {
+  success: boolean;
+  data: QuoteData;
+  message?: string;
+}
+
+// 盘口数据
+export interface QuoteData {
+  code: string;
+  name: string;
+  current: MinuteCurInfo;
+  pankou: Record<string, PankouItem>;
+  buyLevels: OrderLevel[];
+  sellLevels: OrderLevel[];
+}

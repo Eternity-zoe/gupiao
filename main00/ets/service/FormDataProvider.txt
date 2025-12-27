@@ -1,0 +1,75 @@
+// 桌面卡片数据提供者
+import formInfo from '@ohos.app.form.formInfo';
+import formBindingData from '@ohos.app.form.formBindingData';
+import { StockService } from '../service/StockService';
+import { StorageService } from '../service/StorageService';
+
+export class FormDataProvider {
+  /**
+   * 获取卡片数据
+   */
+  static async getFormData(formId: string, formName: string): Promise<formBindingData.FormBindingData> {
+    try {
+      // 获取上证指数和深证指数
+      const [shIndex, szIndex] = await Promise.all([
+        StockService.getIndexData(0),
+        StockService.getIndexData(1)
+      ]);
+      
+      // 获取自选股（取第一个分组的前3只股票）
+      const groups = await StorageService.getStockGroups();
+      let stocksData: any[] = [];
+      
+      if (groups.length > 0 && groups[0].stocks.length > 0) {
+        const stockGids = groups[0].stocks.slice(0, 3);
+        const stockMap = await StockService.getMultipleStocks(stockGids);
+        
+        stockGids.forEach(gid => {
+          const stock = stockMap.get(gid);
+          if (stock) {
+            stocksData.push({
+              name: stock.data.name,
+              gid: gid,
+              price: stock.data.nowPri,
+              change: stock.data.increPer,
+              isUp: parseFloat(stock.data.increPer) >= 0
+            });
+          }
+        });
+      }
+      
+      const data = {
+        shIndexName: '上证指数',
+        shIndexPrice: shIndex?.nowpri || '--',
+        shIndexChange: shIndex?.increPer || '0',
+        shIndexIsUp: shIndex ? parseFloat(shIndex.increPer) >= 0 : true,
+        
+        szIndexName: '深证指数',
+        szIndexPrice: szIndex?.nowpri || '--',
+        szIndexChange: szIndex?.increPer || '0',
+        szIndexIsUp: szIndex ? parseFloat(szIndex.increPer) >= 0 : true,
+        
+        stocks: stocksData,
+        updateTime: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      };
+      
+      return formBindingData.createFormBindingData(data);
+    } catch (error) {
+      console.error('获取卡片数据失败:', error);
+      
+      // 返回默认数据
+      return formBindingData.createFormBindingData({
+        shIndexName: '上证指数',
+        shIndexPrice: '--',
+        shIndexChange: '0',
+        shIndexIsUp: true,
+        szIndexName: '深证指数',
+        szIndexPrice: '--',
+        szIndexChange: '0',
+        szIndexIsUp: true,
+        stocks: [],
+        updateTime: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      });
+    }
+  }
+}

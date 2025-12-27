@@ -1,0 +1,811 @@
+// 股票详情页
+import { StockService } from '../service/StockService';
+import { StockInfo, KLineData, KLineDataPoint, MinuteData } from '../model/StockData';
+import router from '@ohos.router';
+
+@Entry
+@Component
+struct StockDetail {
+  @State stockGid: string = '';
+  @State stockCode: string = '';
+  @State stockInfo: StockInfo | null = null;
+  @State minuteData: MinuteData | null = null;
+  @State klineData: KLineData | null = null;
+  @State isLoading: boolean = false;
+  @State currentKLineType: string = 'day'; // min1, day, week, month
+  @State refreshTime: string = '';
+  @State financeType: string = 'stock';
+  private refreshTimer: number = -1;
+
+  aboutToAppear() {
+    // 获取路由参数
+    const params = router.getParams() as Record<string, Object>;
+    if (params && params.gid) {
+      this.stockGid = params.gid as string;
+      // 解析股票代码
+      const parsed = StockService.parseGid(this.stockGid);
+      this.stockCode = parsed.code;
+    }
+    if (params && params.financeType) {
+      this.financeType = params.financeType as string;
+    }
+
+    if (this.stockGid) {
+      this.loadStockData();
+      this.loadKLineData();
+
+      // 定时刷新
+      this.refreshTimer = setInterval(() => {
+        this.loadStockData();
+      }, 30000);
+    }
+  }
+
+  aboutToDisappear() {
+    if (this.refreshTimer !== -1) {
+      clearInterval(this.refreshTimer);
+    }
+  }
+
+  async loadStockData() {
+    this.isLoading = true;
+
+    try {
+      console.info(`[详情页] 开始加载股票数据, gid=${this.stockGid}, code=${this.stockCode}`);
+      // 优先使用新API获取分时数据
+      this.minuteData = await StockService.getMinuteData(this.stockCode, 'ab', this.financeType);
+
+      if (this.minuteData) {
+        console.info(`[详情页] 新API获取成功: ${this.minuteData.name}`);
+        // 将新API数据转换为旧格式以兼容现有UI
+        this.stockInfo = this.convertMinuteDataToStockInfo(this.minuteData);
+        const now = new Date();
+        this.refreshTime = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+      } else {
+        console.warn(`[详情页] 新API返回空，尝试使用盘口API`);
+        // 尝试使用盘口API
+        const quoteData = await StockService.getQuoteData(this.stockCode, 'ab', this.financeType);
+        if (quoteData) {
+          console.info(`[详情页] 盘口API获取成功: ${quoteData.name}`);
+          this.stockInfo = StockService.convertQuoteToStockInfo(this.stockGid, quoteData);
+          const now = new Date();
+          this.refreshTime = `${now.getHours()}:${now.getMinutes().toString().padStart(2, '0')}`;
+        } else {
+          console.warn(`[详情页] 盘口API也失败，使用模拟数据`);
+          this.stockInfo = this.generateMockStockData();
+          this.refreshTime = '模拟数据';
+        }
+      }
+    } catch (error) {
+      console.error('[详情页] 加载股票数据失败:', error);
+      this.stockInfo = this.generateMockStockData();
+      this.refreshTime = '模拟数据';
+    }
+
+    this.isLoading = false;
+  }
+
+  // 加载K线数据
+  async loadKLineData() {
+    console.info(`开始加载K线数据, stockCode=${this.stockCode}, ktype=${this.getKTypeForApi()}`);
+    try {
+      const ktype = this.getKTypeForApi();
+      const result = await StockService.getKLineData(this.stockCode, ktype, 'ab', this.financeType);
+      if (result && result.data && result.data.length > 0) {
+        this.klineData = result;
+        console.info(`K线数据加载成功: ${result.count}条`);
+      } else {
+        console.warn('K线数据为空');
+        this.klineData = null;
+      }
+    } catch (error) {
+      console.error('加载K线数据失败:', error);
+      this.klineData = null;
+    }
+  }
+
+  // 获取API对应的K线类型
+  getKTypeForApi(): string {
+    switch (this.currentKLineType) {
+      case 'min':
+        return 'min1';
+      case 'day':
+        return 'day';
+      case 'week':
+        return 'week';
+      case 'month':
+        return 'month';
+      default:
+        return 'day';
+    }
+  }
+
+  // 将新API分时数据转换为旧格式
+  convertMinuteDataToStockInfo(data: MinuteData): StockInfo {
+    const pankou = data.pankou;
+    const cur = data.cur;
+
+    // 当前价格：优先用 cur.price，否则用收盘价或最高价
+    const currentPrice = cur?.price ||
+      pankou?.['close']?.originValue ||
+      pankou?.['high']?.originValue ||
+      pankou?.['preClose']?.originValue ||
+      '0';
+
+    // 昨收价
+    const preClose = pankou?.['preClose']?.originValue || '0';
+
+    // 涨跌幅和涨跌额：优先用API返回的，否则计算
+    let ratio = cur?.ratio?.replace('%', '') ||
+      pankou?.['changeRatio']?.originValue?.replace('%', '') ||
+      '';
+    let increase = cur?.increase ||
+      pankou?.['change']?.originValue ||
+      '';
+
+    // 如果没有涨跌数据，根据当前价和昨收价计算
+    if ((!ratio || ratio === '0') && currentPrice !== '0' && preClose !== '0') {
+      const priceNum = parseFloat(currentPrice);
+      const preCloseNum = parseFloat(preClose);
+      if (preCloseNum > 0) {
+        const increaseNum = priceNum - preCloseNum;
+        const ratioNum = (increaseNum / preCloseNum) * 100;
+        increase = increaseNum.toFixed(2);
+        ratio = ratioNum.toFixed(2);
+      }
+    }
+
+    // 确保有默认值
+    if (!ratio) ratio = '0';
+    if (!increase) increase = '0';
+
+    return {
+      data: {
+        gid: this.stockGid,
+        name: data.basicInfo?.name || data.name || this.stockCode,
+        nowPri: currentPrice,
+        increPer: ratio,
+        increase: increase,
+        todayStartPri: pankou?.['open']?.originValue || '0',
+        todayMax: pankou?.['high']?.originValue || '0',
+        todayMin: pankou?.['low']?.originValue || '0',
+        yestodEndPri: pankou?.['preClose']?.originValue || '0',
+        competitivePri: currentPrice,
+        reservePri: currentPrice,
+        traNumber: pankou?.['volume']?.originValue || '0',
+        traAmount: pankou?.['amount']?.originValue || '0',
+        buyOne: data.buyLevels?.[0]?.bidvolume || '0',
+        buyOnePri: data.buyLevels?.[0]?.bidprice || '0',
+        buyTwo: data.buyLevels?.[1]?.bidvolume || '0',
+        buyTwoPri: data.buyLevels?.[1]?.bidprice || '0',
+        buyThree: data.buyLevels?.[2]?.bidvolume || '0',
+        buyThreePri: data.buyLevels?.[2]?.bidprice || '0',
+        buyFour: data.buyLevels?.[3]?.bidvolume || '0',
+        buyFourPri: data.buyLevels?.[3]?.bidprice || '0',
+        buyFive: data.buyLevels?.[4]?.bidvolume || '0',
+        buyFivePri: data.buyLevels?.[4]?.bidprice || '0',
+        sellOne: data.sellLevels?.[0]?.askvolume || '0',
+        sellOnePri: data.sellLevels?.[0]?.askprice || '0',
+        sellTwo: data.sellLevels?.[1]?.askvolume || '0',
+        sellTwoPri: data.sellLevels?.[1]?.askprice || '0',
+        sellThree: data.sellLevels?.[2]?.askvolume || '0',
+        sellThreePri: data.sellLevels?.[2]?.askprice || '0',
+        sellFour: data.sellLevels?.[3]?.askvolume || '0',
+        sellFourPri: data.sellLevels?.[3]?.askprice || '0',
+        sellFive: data.sellLevels?.[4]?.askvolume || '0',
+        sellFivePri: data.sellLevels?.[4]?.askprice || '0',
+        date: data.update?.text?.split(' ')[0] || '',
+        time: data.update?.text?.split(' ')[1] || ''
+      },
+      gopicture: {
+        minurl: '',
+        dayurl: '',
+        weekurl: '',
+        monthurl: ''
+      }
+    };
+  }
+
+  // 生成模拟股票数据
+  generateMockStockData(): StockInfo {
+    const basePrice = 15.50 + Math.random() * 30; // 基础价格 15.50-45.50
+    const changePercent = (Math.random() - 0.5) * 20; // -10% 到 +10%
+    const changeAmount = (basePrice * changePercent / 100);
+    const currentPrice = basePrice + changeAmount;
+    
+    const mockData: StockInfo = {
+      data: {
+        gid: this.stockGid,
+        name: this.getStockName(this.stockGid),
+        todayStartPri: basePrice.toFixed(2),
+        nowPri: currentPrice.toFixed(2),
+        yestodEndPri: basePrice.toFixed(2),
+        increase: changeAmount.toFixed(2),
+        increPer: changePercent.toFixed(2),
+        todayMax: (currentPrice + Math.random() * 2).toFixed(2),
+        todayMin: (currentPrice - Math.random() * 2).toFixed(2),
+        traAmount: (Math.random() * 500000000).toFixed(0),
+        traNumber: Math.floor(Math.random() * 100000).toString(),
+        competitivePri: currentPrice.toFixed(2),
+        reservePri: currentPrice.toFixed(2),
+        buyOne: Math.floor(Math.random() * 1000).toString(),
+        buyOnePri: (currentPrice - 0.01).toFixed(2),
+        buyTwo: Math.floor(Math.random() * 1000).toString(),
+        buyTwoPri: (currentPrice - 0.02).toFixed(2),
+        buyThree: Math.floor(Math.random() * 1000).toString(),
+        buyThreePri: (currentPrice - 0.03).toFixed(2),
+        buyFour: Math.floor(Math.random() * 1000).toString(),
+        buyFourPri: (currentPrice - 0.04).toFixed(2),
+        buyFive: Math.floor(Math.random() * 1000).toString(),
+        buyFivePri: (currentPrice - 0.05).toFixed(2),
+        sellOne: Math.floor(Math.random() * 1000).toString(),
+        sellOnePri: (currentPrice + 0.01).toFixed(2),
+        sellTwo: Math.floor(Math.random() * 1000).toString(),
+        sellTwoPri: (currentPrice + 0.02).toFixed(2),
+        sellThree: Math.floor(Math.random() * 1000).toString(),
+        sellThreePri: (currentPrice + 0.03).toFixed(2),
+        sellFour: Math.floor(Math.random() * 1000).toString(),
+        sellFourPri: (currentPrice + 0.04).toFixed(2),
+        sellFive: Math.floor(Math.random() * 1000).toString(),
+        sellFivePri: (currentPrice + 0.05).toFixed(2),
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toTimeString().split(' ')[0]
+      },
+      gopicture: {
+        minurl: 'https://via.placeholder.com/400x200/f0f0f0/666666?text=分时图',
+        dayurl: 'https://via.placeholder.com/400x200/f0f0f0/666666?text=日K线',
+        weekurl: 'https://via.placeholder.com/400x200/f0f0f0/666666?text=周K线',
+        monthurl: 'https://via.placeholder.com/400x200/f0f0f0/666666?text=月K线'
+      }
+    };
+    
+    return mockData;
+  }
+
+  // 根据股票代码获取股票名称
+  getStockName(gid: string): string {
+    const stockNames: Record<string, string> = {
+      'sz000001': '平安银行',
+      'sz000002': '万科A',
+      'sh600000': '浦发银行',
+      'sh600036': '招商银行',
+      'sh600519': '贵州茅台',
+      'sh000001': '上证指数',
+      'sz399001': '深证成指',
+      'sz399006': '创业板指'
+    };
+    
+    return stockNames[gid] || `股票${gid.slice(-4)}`;
+  }
+
+  build() {
+    Column() {
+      // 标题栏
+      this.buildHeader();
+      
+      Scroll() {
+        Column() {
+          // 价格信息区
+          this.buildPriceSection();
+          
+          // K线图区域
+          this.buildKLineSection();
+          
+          // 实时行情数据
+          this.buildMarketDataSection();
+          
+          // 买卖盘口
+          this.buildOrderBookSection();
+        }
+      }
+      .layoutWeight(1)
+      .backgroundColor('#F5F5F5')
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  buildHeader() {
+    Row() {
+      Image($r('app.media.layered_image'))
+        .width(24)
+        .height(24)
+        .onClick(() => {
+          router.back();
+        })
+      
+      Column() {
+        Text(this.stockInfo?.data.name || this.stockGid)
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#1A1A1A')
+        
+        Text(this.stockGid.toUpperCase())
+          .fontSize(12)
+          .fontColor('#999999')
+          .margin({ top: 2 })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .margin({ left: 12 })
+      .layoutWeight(1)
+      
+      if (this.refreshTime) {
+        Text(`${this.refreshTime}`)
+          .fontSize(12)
+          .fontColor(this.refreshTime === '模拟数据' ? '#FF6B35' : '#999999')
+          .fontWeight(this.refreshTime === '模拟数据' ? FontWeight.Bold : FontWeight.Normal)
+      }
+    }
+    .width('100%')
+    .height(56)
+    .padding({ left: 16, right: 16 })
+    .backgroundColor('#FFFFFF')
+  }
+
+  @Builder
+  buildPriceSection() {
+    Column() {
+      if (this.stockInfo) {
+        // 当前价格
+        Text(this.stockInfo.data.nowPri)
+          .fontSize(36)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(parseFloat(this.stockInfo.data.increPer) >= 0 ? '#E64545' : '#00B578')
+        
+        // 涨跌信息
+        Row() {
+          Text(`${parseFloat(this.stockInfo.data.increPer) >= 0 ? '+' : ''}${this.stockInfo.data.increase}`)
+            .fontSize(16)
+            .fontColor(parseFloat(this.stockInfo.data.increPer) >= 0 ? '#E64545' : '#00B578')
+          
+          Text(`${parseFloat(this.stockInfo.data.increPer) >= 0 ? '+' : ''}${this.stockInfo.data.increPer}%`)
+            .fontSize(16)
+            .fontColor(parseFloat(this.stockInfo.data.increPer) >= 0 ? '#E64545' : '#00B578')
+            .margin({ left: 12 })
+        }
+        .margin({ top: 8 })
+        
+        // 四项指标
+        Row() {
+          this.buildIndicatorItem('开盘', this.stockInfo.data.todayStartPri);
+          this.buildIndicatorItem('最高', this.stockInfo.data.todayMax);
+          this.buildIndicatorItem('最低', this.stockInfo.data.todayMin);
+          this.buildIndicatorItem('昨收', this.stockInfo.data.yestodEndPri);
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceBetween)
+        .margin({ top: 16 })
+        
+        // 成交量和成交额
+        Row() {
+          this.buildIndicatorItem('成交量', this.formatVolume(this.stockInfo.data.traNumber));
+          this.buildIndicatorItem('成交额', this.formatAmount(this.stockInfo.data.traAmount));
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.Start)
+        .margin({ top: 12 })
+      } else {
+        Text('加载中...')
+          .fontSize(16)
+          .fontColor('#999999')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor('#FFFFFF')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ top: 8 })
+  }
+
+  @Builder
+  buildIndicatorItem(label: string, value: string) {
+    Column() {
+      Text(label)
+        .fontSize(12)
+        .fontColor('#999999')
+      
+      Text(value)
+        .fontSize(14)
+        .fontColor('#1A1A1A')
+        .fontWeight(FontWeight.Medium)
+        .margin({ top: 4 })
+    }
+    .alignItems(HorizontalAlign.Start)
+    .margin({ right: 24 })
+  }
+
+  @Builder
+  buildKLineSection() {
+    Column() {
+      // K线类型切换
+      Row() {
+        this.buildKLineTab('分时', 'min');
+        this.buildKLineTab('日K', 'day');
+        this.buildKLineTab('周K', 'week');
+        this.buildKLineTab('月K', 'month');
+      }
+      .width('100%')
+
+      // K线图
+      if (this.klineData && this.klineData.data && this.klineData.data.length > 0) {
+        // 使用真实K线数据绘制
+        this.buildRealKLineChart();
+      } else {
+        Column() {
+          if (this.isLoading) {
+            LoadingProgress()
+              .width(40)
+              .height(40)
+            Text('加载K线数据...')
+              .fontSize(14)
+              .fontColor('#999999')
+              .margin({ top: 8 })
+          } else {
+            // 显示模拟K线图
+            this.buildMockKLineChart();
+          }
+        }
+        .width('100%')
+        .height(250)
+        .justifyContent(FlexAlign.Center)
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor('#FFFFFF')
+    .margin({ top: 8 })
+  }
+
+  @Builder
+  buildRealKLineChart() {
+    Column() {
+      // K线图表区域
+      Stack() {
+        // 背景网格
+        Column() {
+          ForEach([0, 1, 2, 3, 4], () => {
+            Divider()
+              .strokeWidth(1)
+              .color('#F0F0F0')
+              .margin({ top: 40 })
+          })
+        }
+        .width('100%')
+        .height(200)
+
+        // K线柱状图
+        Row() {
+          ForEach(this.getDisplayKLineData(), (item: KLineDataPoint, index: number) => {
+            Column() {
+              // 上影线
+              Column()
+                .width(1)
+                .height(this.calcShadowHeight(item, true))
+                .backgroundColor(this.getKLineColor(item))
+
+              // K线实体
+              Column()
+                .width(6)
+                .height(Math.max(this.calcBodyHeight(item), 2))
+                .backgroundColor(this.getKLineColor(item))
+                .borderRadius(1)
+
+              // 下影线
+              Column()
+                .width(1)
+                .height(this.calcShadowHeight(item, false))
+                .backgroundColor(this.getKLineColor(item))
+            }
+            .justifyContent(FlexAlign.Center)
+            .layoutWeight(1)
+          })
+        }
+        .width('100%')
+        .height(200)
+        .padding({ left: 8, right: 8 })
+        .alignItems(VerticalAlign.Bottom)
+      }
+      .width('100%')
+      .height(200)
+
+      // 底部信息
+      Row() {
+        if (this.klineData && this.klineData.data.length > 0) {
+          Text(`${this.klineData.data[this.klineData.data.length - 1]?.time || ''}`)
+            .fontSize(10)
+            .fontColor('#999999')
+
+          Blank()
+
+          Text(`共${this.klineData.count}条数据`)
+            .fontSize(10)
+            .fontColor('#999999')
+        }
+      }
+      .width('100%')
+      .padding({ top: 8 })
+    }
+    .width('100%')
+    .margin({ top: 12 })
+  }
+
+  // 获取显示用的K线数据（最近30条）
+  getDisplayKLineData(): KLineDataPoint[] {
+    if (!this.klineData || !this.klineData.data) {
+      return [];
+    }
+    const data = this.klineData.data;
+    const displayCount = Math.min(30, data.length);
+    return data.slice(data.length - displayCount);
+  }
+
+  // 计算K线颜色
+  getKLineColor(item: KLineDataPoint): string {
+    const open = parseFloat(item.open);
+    const close = parseFloat(item.close);
+    return close >= open ? '#E64545' : '#00B578';
+  }
+
+  // 计算K线实体高度
+  calcBodyHeight(item: KLineDataPoint): number {
+    const displayData = this.getDisplayKLineData();
+    if (displayData.length === 0) return 0;
+
+    const prices = displayData.flatMap(d => [parseFloat(d.high), parseFloat(d.low)]);
+    const maxPrice = Math.max(...prices);
+    const minPrice = Math.min(...prices);
+    const priceRange = maxPrice - minPrice || 1;
+
+    const open = parseFloat(item.open);
+    const close = parseFloat(item.close);
+    const bodyRange = Math.abs(close - open);
+
+    return (bodyRange / priceRange) * 160;
+  }
+
+  // 计算影线高度
+  calcShadowHeight(item: KLineDataPoint, isUpper: boolean): number {
+    const displayData = this.getDisplayKLineData();
+    if (displayData.length === 0) return 0;
+
+    const prices = displayData.flatMap(d => [parseFloat(d.high), parseFloat(d.low)]);
+    const maxPrice = Math.max(...prices);
+    const minPrice = Math.min(...prices);
+    const priceRange = maxPrice - minPrice || 1;
+
+    const open = parseFloat(item.open);
+    const close = parseFloat(item.close);
+    const high = parseFloat(item.high);
+    const low = parseFloat(item.low);
+
+    const bodyTop = Math.max(open, close);
+    const bodyBottom = Math.min(open, close);
+
+    if (isUpper) {
+      return ((high - bodyTop) / priceRange) * 160;
+    } else {
+      return ((bodyBottom - low) / priceRange) * 160;
+    }
+  }
+
+  @Builder
+  buildKLineTab(label: string, type: string) {
+    Text(label)
+      .fontSize(14)
+      .fontColor(this.currentKLineType === type ? '#0A59F7' : '#666666')
+      .fontWeight(this.currentKLineType === type ? FontWeight.Bold : FontWeight.Normal)
+      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .borderRadius(4)
+      .backgroundColor(this.currentKLineType === type ? '#E8F2FF' : 'transparent')
+      .onClick(() => {
+        this.currentKLineType = type;
+        // 切换K线类型时重新加载数据
+        this.loadKLineData();
+      })
+  }
+
+  getKLineUrl(): string {
+    if (!this.stockInfo) return '';
+    
+    switch (this.currentKLineType) {
+      case 'min':
+        return this.stockInfo.gopicture.minurl;
+      case 'day':
+        return this.stockInfo.gopicture.dayurl;
+      case 'week':
+        return this.stockInfo.gopicture.weekurl;
+      case 'month':
+        return this.stockInfo.gopicture.monthurl;
+      default:
+        return this.stockInfo.gopicture.dayurl;
+    }
+  }
+
+  @Builder
+  buildMockKLineChart() {
+    Column() {
+      // 模拟K线图表
+      Row() {
+        ForEach([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19], (index: number) => {
+          Column() {
+            // 模拟K线柱
+            Column()
+              .width(8)
+              .height(Math.random() * 80 + 20)
+              .backgroundColor(Math.random() > 0.5 ? '#E64545' : '#00B578')
+              .borderRadius(2)
+          }
+          .layoutWeight(1)
+          .justifyContent(FlexAlign.End)
+        })
+      }
+      .width('100%')
+      .height(180)
+      .padding({ left: 20, right: 20, bottom: 20 })
+      .justifyContent(FlexAlign.SpaceBetween)
+      
+      // 底部说明
+      Text(`${this.getKLineTypeLabel()} - 模拟数据`)
+        .fontSize(12)
+        .fontColor('#FF6B35')
+        .margin({ top: 8 })
+    }
+    .width('100%')
+    .height(250)
+    .backgroundColor('#F8F8F8')
+    .borderRadius(8)
+    .margin({ top: 12 })
+    .justifyContent(FlexAlign.Center)
+  }
+
+  getKLineTypeLabel(): string {
+    switch (this.currentKLineType) {
+      case 'min':
+        return '分时图';
+      case 'day':
+        return '日K线';
+      case 'week':
+        return '周K线';
+      case 'month':
+        return '月K线';
+      default:
+        return '日K线';
+    }
+  }
+
+  @Builder
+  buildMarketDataSection() {
+    Column() {
+      Text('实时行情')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#1A1A1A')
+        .margin({ bottom: 12 })
+      
+      if (this.stockInfo) {
+        Column() {
+          this.buildDataRow('竞买价', this.stockInfo.data.competitivePri);
+          this.buildDataRow('竞卖价', this.stockInfo.data.reservePri);
+          this.buildDataRow('振幅', this.calculateAmplitude());
+          this.buildDataRow('更新时间', `${this.stockInfo.data.date} ${this.stockInfo.data.time}`);
+        }
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor('#FFFFFF')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ top: 8 })
+  }
+
+  @Builder
+  buildOrderBookSection() {
+    Column() {
+      Text('买卖盘口')
+        .fontSize(16)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#1A1A1A')
+        .margin({ bottom: 12 })
+      
+      if (this.stockInfo) {
+        Column() {
+          // 卖盘
+          this.buildOrderRow('卖五', this.stockInfo.data.sellFivePri, this.stockInfo.data.sellFive, false);
+          this.buildOrderRow('卖四', this.stockInfo.data.sellFourPri, this.stockInfo.data.sellFour, false);
+          this.buildOrderRow('卖三', this.stockInfo.data.sellThreePri, this.stockInfo.data.sellThree, false);
+          this.buildOrderRow('卖二', this.stockInfo.data.sellTwoPri, this.stockInfo.data.sellTwo, false);
+          this.buildOrderRow('卖一', this.stockInfo.data.sellOnePri, this.stockInfo.data.sellOne, false);
+          
+          Divider()
+            .height(2)
+            .color('#E5E5E5')
+            .margin({ top: 8, bottom: 8 })
+          
+          // 买盘
+          this.buildOrderRow('买一', this.stockInfo.data.buyOnePri, this.stockInfo.data.buyOne, true);
+          this.buildOrderRow('买二', this.stockInfo.data.buyTwoPri, this.stockInfo.data.buyTwo, true);
+          this.buildOrderRow('买三', this.stockInfo.data.buyThreePri, this.stockInfo.data.buyThree, true);
+          this.buildOrderRow('买四', this.stockInfo.data.buyFourPri, this.stockInfo.data.buyFour, true);
+          this.buildOrderRow('买五', this.stockInfo.data.buyFivePri, this.stockInfo.data.buyFive, true);
+        }
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor('#FFFFFF')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ top: 8, bottom: 8 })
+  }
+
+  @Builder
+  buildDataRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(14)
+        .fontColor('#666666')
+        .layoutWeight(1)
+      
+      Text(value)
+        .fontSize(14)
+        .fontColor('#1A1A1A')
+    }
+    .width('100%')
+    .margin({ bottom: 8 })
+  }
+
+  @Builder
+  buildOrderRow(label: string, price: string, volume: string, isBuy: boolean) {
+    Row() {
+      Text(label)
+        .fontSize(13)
+        .fontColor('#666666')
+        .width(50)
+      
+      Text(price)
+        .fontSize(14)
+        .fontColor(isBuy ? '#E64545' : '#00B578')
+        .fontWeight(FontWeight.Medium)
+        .layoutWeight(1)
+      
+      Text(volume)
+        .fontSize(13)
+        .fontColor('#666666')
+    }
+    .width('100%')
+    .margin({ bottom: 6 })
+  }
+
+  formatVolume(volume: string): string {
+    const num = parseFloat(volume);
+    if (num >= 100000000) {
+      return `${(num / 100000000).toFixed(2)}亿`;
+    } else if (num >= 10000) {
+      return `${(num / 10000).toFixed(2)}万`;
+    }
+    return volume;
+  }
+
+  formatAmount(amount: string): string {
+    const num = parseFloat(amount);
+    if (num >= 100000000) {
+      return `${(num / 100000000).toFixed(2)}亿`;
+    } else if (num >= 10000) {
+      return `${(num / 10000).toFixed(2)}万`;
+    }
+    return amount;
+  }
+
+  calculateAmplitude(): string {
+    if (!this.stockInfo) return '--';
+    
+    const high = parseFloat(this.stockInfo.data.todayMax);
+    const low = parseFloat(this.stockInfo.data.todayMin);
+    const yesterday = parseFloat(this.stockInfo.data.yestodEndPri);
+    
+    if (yesterday === 0) return '--';
+    
+    const amplitude = ((high - low) / yesterday * 100).toFixed(2);
+    return `${amplitude}%`;
+  }
+}
